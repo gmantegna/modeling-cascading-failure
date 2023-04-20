@@ -1,20 +1,12 @@
 # Modeling Cascading Failure
 
-[![PyPI - Version](https://img.shields.io/pypi/v/modeling-cascading-failure.svg)](https://pypi.org/project/modeling-cascading-failure)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/modeling-cascading-failure.svg)](https://pypi.org/project/modeling-cascading-failure)
+[![.github/workflows/ci.yml](https://github.com/gmantegna/modeling-cascading-failure/actions/workflows/ci.yml/badge.svg)](https://github.com/gmantegna/modeling-cascading-failure/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 -----
 
 **Table of Contents**
 
-- [Installation](#installation)
 - [License](#license)
-
-## Installation
-
-```console
-pip install modeling-cascading-failure
-```
 
 ## License
 
