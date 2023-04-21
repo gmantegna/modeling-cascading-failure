@@ -56,7 +56,7 @@ def simulate_system(
         tuple[xr.DataArray,xr.DataArray,xr.DataArray,list]:
             - theta (xr.DataArray): xarray with dimensions Nx(t_max/delta_t) giving evolution of thetas over time
             - omega (xr.DataArray): xarray with dimensions Nx(t_max/delta_t) giving evolution of omegas over time
-            - F (xr.DataArray): xarray with dimensions NxNx(t_max/delta_t) giving evolution of line flows over time
+            - F (xr.DataArray): xarray with dimensions NxNx(t_max/delta_t) giving evolution of line flows over time (in MW)
             - failure_time (list): list with length number_of_cuts where each value is a tuple showing when each line fails: [i,j,cut_time]
     """
 
@@ -129,7 +129,7 @@ def simulate_system(
         data=X[N:, :], dims=["node", "time"], coords=dict(node=i, time=T)
     )
     flows = xr.DataArray(
-        data=F,
+        data=F * base_MVA,
         dims=["time", "node_i", "node_j"],
         coords=dict(time=T, node_i=i, node_j=j),
     )
