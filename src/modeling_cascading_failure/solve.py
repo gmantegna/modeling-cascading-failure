@@ -9,7 +9,7 @@ def swing_equation_ODE(t, X_t, K, P, I, gamma):
     X_t: np.array of dimension 2Nx1, giving thetas and omegas at time t, it is of the form (theta_0,...,theta_N,omega_1,..omega_N)
     t: the time at which the integraion starts
     K: np.array of dimension NxN, representing the coupling strength between nodes
-    P: np.array of dimension Nx1, giving the power at the nodes of the system
+    P: np.array of dimension Nx1, giving the real power at the nodes of the system
     I: np.array of dimension Nx1, giving the inertia constants at the nodes of the system
     gamma: np.array of dimension Nx1, giving the damping coefficients at the nodes of the system
 
