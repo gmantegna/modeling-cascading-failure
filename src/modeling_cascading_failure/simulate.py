@@ -71,9 +71,21 @@ def simulate_system(
         assert v.shape == correct_shape
 
     # Solve initial state with Newton-Raphson, ignoring conductance
+    G_multiplier = 1e-6
+    G = np.real(Y)
     B = np.imag(Y)
+    Y_smallconductance = G * G_multiplier + B * 1j
     V_abs, theta_0, P, _ = newton_raphson(
-        Y, PV_x, PQ_x, x_slack, V_abs, V_phase, P_input, Q_input, eps, max_iter
+        Y_smallconductance,
+        PV_x,
+        PQ_x,
+        x_slack,
+        V_abs,
+        V_phase,
+        P_input,
+        Q_input,
+        eps,
+        max_iter,
     )
     K = B * (V_abs @ V_abs.T)
     omega_0 = np.zeros((N, 1))
@@ -81,7 +93,7 @@ def simulate_system(
 
     # Variables to keep track of the evolution of X and F over time
     X = np.copy(X_t)
-    F = K * np.sin(omega_0.T - omega_0)
+    F = K * np.sin(theta_0.T - theta_0)
     F = F[np.newaxis, ...]
 
     # Run simulation until t=cut_time
