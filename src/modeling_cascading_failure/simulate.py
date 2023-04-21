@@ -1,7 +1,10 @@
 import numpy as np
 import xarray as xr
 import cmath
-import solve
+import importlib
+from modeling_cascading_failure import solve
+
+importlib.reload(solve)
 
 nprect = np.vectorize(cmath.rect)
 npphase = np.vectorize(cmath.phase)
@@ -70,7 +73,7 @@ def simulate_system(
     # Solve initial state with Newton-Raphson, ignoring conductance
     B = np.imag(Y)
     V_abs, theta_0, P, _ = newton_raphson(
-        B, PV_x, PQ_x, x_slack, V_abs, V_phase, P_input, Q_input, eps, max_iter
+        Y, PV_x, PQ_x, x_slack, V_abs, V_phase, P_input, Q_input, eps, max_iter
     )
     K = B * (V_abs @ V_abs.T)
     omega_0 = np.zeros((N, 1))
@@ -119,7 +122,7 @@ def simulate_system(
             failure_time += cuts_list
 
     # Prepare outputs
-    T = np.arange(0, t_max + delta_t, delta_t)
+    T = np.arange(0, t_max + delta_t * 2, delta_t)
     i = np.arange(N)
     j = np.arange(N)
     theta = xr.DataArray(

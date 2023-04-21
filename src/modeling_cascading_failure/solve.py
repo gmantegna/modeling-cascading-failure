@@ -54,4 +54,4 @@ def simulate_time_step(X_t, K, P, I, gamma, delta_t):
     )
     # Extracting the state at t+delta_t:
     X_t_plus_1 = integration.y.T[-1]
-    return X_t_plus_1
+    return X_t_plus_1.reshape(-1, 1)
