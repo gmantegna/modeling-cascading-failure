@@ -4,12 +4,20 @@ from src.modeling_cascading_failure import solve
 
 def test_simulate_time_step():
     # Test case inputs
-    X_t_test = np.array([[0, 0, 0.321, 0]]).T
-    K_test = np.array([[-5, 5], [5, -5]])
-    P_test = np.array([[1, 1.5]]).T
+    # Input variables vector (theta_1,omega_1,theta_2,omega_2)
+    X_t_test = np.array([[0, -0.32128859, 0, 0]]).T
+    # Constructing the coupling matrix K
+    B_test = np.array([[-5, 5], [5, -5]])  # Admittance matrix
+    V_test = np.array([[1, 0.95]])  # Voltage amplitudes vector
+    K_test = B_test * (V_test.T @ V_test)  # Coupling matrix
+    # Real power vector
+    P_test = np.array([[1.5, -1.5]]).T
+    # Moment of inertia vector
     I_test = np.array([[1, 1]]).T
+    # Decay constants vector
     gamma_test = np.array([[1, 1]]).T
-    delta_t_test = 0.1
+    # step_size
+    delta_t_test = float(0.1)
 
     assert (
         solve.simulate_time_step(
