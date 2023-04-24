@@ -61,6 +61,7 @@ def simulate_system(
             - omega (xr.DataArray): xarray with dimensions Nx(t_max/delta_t) giving evolution of omegas over time
             - F (xr.DataArray): xarray with dimensions NxNx(t_max/delta_t) giving evolution of line flows over time (in MW)
             - failure_time (list): list with length number_of_cuts where each value is a tuple showing when each line fails: [i,j,cut_time]
+            - F_threshold (np.array): np.array with dimensions NxN giving the threshold for line cutting applied in the simulation (in MW)
     """
 
     # Assert that inputs are the proper size
@@ -117,7 +118,7 @@ def simulate_system(
     # Run simulation with cut line and cut more lines as necessary
     while t < t_max:
         X_t = solve.simulate_time_step(X_t, K_cut, P, I, gamma, delta_t)
-        F_t = K * np.sin(X_t[:N].T - X_t[:N])
+        F_t = K_cut * np.sin(X_t[:N].T - X_t[:N])
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
         t += delta_t
@@ -149,7 +150,7 @@ def simulate_system(
         coords=dict(time=T, node_i=i, node_j=j),
     )
 
-    return theta, omega, flows, failure_time
+    return theta, omega, flows, failure_time, F_threshold * base_MVA
 
 
 def newton_raphson(
