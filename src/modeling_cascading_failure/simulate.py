@@ -76,6 +76,7 @@ def simulate_system(
     G = np.real(Y)
     B = np.imag(Y)
     Y_smallconductance = G * G_multiplier + B * 1j
+    print("running N-R")
     V_abs, theta_0, P, _ = newton_raphson(
         Y_smallconductance,
         PV_x,
@@ -88,6 +89,7 @@ def simulate_system(
         eps,
         max_iter,
     )
+    print("finished N-R")
     K = B * (V_abs @ V_abs.T)
     omega_0 = np.zeros((N, 1))
     X_t = np.vstack((theta_0, omega_0))
@@ -98,14 +100,16 @@ def simulate_system(
     F = F[np.newaxis, ...]
 
     # Run simulation until t=cut_time
+    print("running simulation")
     t = 0
     while t < cut_time:
+        print(t)
         X_t = solve.simulate_time_step(X_t, K, P, I, gamma, delta_t)
         F_t = K * np.sin(X_t[:N].T - X_t[:N])
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
         t += delta_t
-
+    print("cutting line")
     # Cut line
     K_cut = np.copy(K)
     i = line_to_cut[0]
@@ -116,7 +120,9 @@ def simulate_system(
     failure_time = [(cut_time, i, j)]
 
     # Run simulation with cut line and cut more lines as necessary
+    print("continuing simulation")
     while t < t_max:
+        print(t)
         X_t = solve.simulate_time_step(X_t, K_cut, P, I, gamma, delta_t)
         F_t = K_cut * np.sin(X_t[:N].T - X_t[:N])
         X = np.hstack((X, X_t))
@@ -211,6 +217,7 @@ def newton_raphson(
     iterations = 0
     epsilon = 1
     while epsilon > eps:
+        print(iterations)
 
         P = np.zeros((N, 1))
         Q = np.zeros((N, 1))
