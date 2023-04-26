@@ -2,7 +2,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 
-def swing_equation_ODE(t, X_t, K, P, I, gamma):
+def swing_equation_ODE(t, X_t, K_G, K_B, P, I, gamma):
     """
     >The function takes as input:
 
@@ -24,13 +24,14 @@ def swing_equation_ODE(t, X_t, K, P, I, gamma):
         dX_dt[N + i] = (1 / I[i]) * (
             P[i]
             - gamma[i] * X_t[N + i]
-            + sum([K[i][j] * np.sin(X_t[j] - X_t[i]) for j in range(N)])
+            + sum([K_G[i][j] * np.cos(X_t[j] - X_t[i]) for j in range(N)])
+            + sum([K_B[i][j] * np.sin(X_t[j] - X_t[i]) for j in range(N)])
         )
 
     return dX_dt
 
 
-def simulate_time_step(X_t, K, P, I, gamma, delta_t):
+def simulate_time_step(X_t, K_G, K_B, P, I, gamma, delta_t):
     """
     >The function takes as input:
 
@@ -49,7 +50,7 @@ def simulate_time_step(X_t, K, P, I, gamma, delta_t):
         swing_equation_ODE,
         (0.0, delta_t),
         X_t.flatten(),
-        args=(K, P, I, gamma),
+        args=(K_G, K_B, P, I, gamma),
         t_eval=[0, delta_t],
     )
     # Extracting the state at t+delta_t:
