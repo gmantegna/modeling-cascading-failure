@@ -6,10 +6,11 @@ def swing_equation_ODE(t, X_t, K_G, K_B, P, I, gamma):
     """
     >The function takes as input:
 
-    X_t: np.array of dimension 2Nx1, giving thetas and omegas at time t, it is of the form (theta_0,...,theta_N,omega_1,..omega_N)
+    X_t: np.array of dimension 2Nx1, giving thetas and omegas at time t, it is of the form (theta_0,...,theta_N,omega_0,...,omega_N)
     t: the time at which the integraion starts
-    K: np.array of dimension NxN, representing the coupling strength between nodes
-    P: np.array of dimension Nx1, giving the real power at the nodes of the system
+    K_G: np.array of dimension NxN, representing the conductance coupling matrix between nodes K_G[i][j] = |V_i V_j|*G[i][j]
+    K_B: np.array of dimension NxN, representing the susceptance coupling matrix between nodes K_B[i][j] = |V_i V_j|*B[i][j]
+    P: np.array of dimension Nx1, giving the power at the nodes of the system
     I: np.array of dimension Nx1, giving the inertia constants at the nodes of the system
     gamma: np.array of dimension Nx1, giving the damping coefficients at the nodes of the system
 
@@ -34,9 +35,9 @@ def swing_equation_ODE(t, X_t, K_G, K_B, P, I, gamma):
 def simulate_time_step(X_t, K_G, K_B, P, I, gamma, delta_t):
     """
     >The function takes as input:
-
-    X_t: np.array of dimension 2Nx1 giving thetas and omegas at time t, it is of the form (theta_0,...,theta_N,omega_1,..omega_N)
-    K: np.array of dimension NxN representing the coupling strength between nodes
+    X_t: np.array of dimension 2Nx1 giving thetas and omegas at time t, it is of the form (theta_0,...,theta_N,omega_0,...,omega_N)
+    K_G: np.array of dimension NxN, representing the conductance coupling matrix between nodes K_G[i][j] = |V_i V_j|*G[i][j]
+    K_B: np.array of dimension NxN, representing the susceptance coupling matrix between nodes K_B[i][j] = |V_i V_j|*B[i][j]
     P: np.array of dimension Nx1 giving the power at the nodes of the system
     I: np.array of dimension Nx1 giving the inertia constants at the nodes of the system
     gamma: np.array of dimension Nx1 giving the damping coefficients at the nodes of the system
