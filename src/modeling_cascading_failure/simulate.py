@@ -129,6 +129,7 @@ def simulate_system(
     K_B_cut[j, i] = 0
     F_threshold = alpha * np.sqrt(np.square(K_G_cut) + np.square(K_B_cut))
     failure_time = [(cut_time, i, j)]
+    frequency_failure = [] #list where forced disconnections due to frequency threshold limit violation are recorded
 
     # Run simulation with cut line and cut more lines as necessary
     while t < t_max:
@@ -147,6 +148,18 @@ def simulate_system(
         threshold_exceeded_mask = np.abs(F_t) > F_threshold
         K_G_cut[threshold_exceeded_mask] = 0
         K_B_cut[threshold_exceeded_mask] = 0
+
+        # check frequency deviation and cut load/generator if necessary
+        where_frequency_threshold_exceeded = np.where(X_t[N:] > 0.02*2*np.pi)[0] # nodes where the frequency deviation limit is exceeded
+        K_cut[where_frequency_threshold_exceeded] = 0 #disconnect nodes where frequency limit is exceeded
+        for i in range(N):
+             K_cut[i][where_frequency_threshold_exceeded] = 0 # nodes connected to the shedded load/generator
+        
+        #record nodes forced to disconnect due to frequency deviation
+        if where_frequency_threshold_exceeded.size != 0:      
+            # get list of tuples where each tuple has (t,i) for the failed node
+            frequency_failure.append([tuple([t] + [i]) for i in where_frequency_threshold_exceeded])
+            
 
         # record lines that were cut in failure_time
         cuts = np.argwhere(threshold_exceeded_mask)
@@ -171,7 +184,7 @@ def simulate_system(
         coords=dict(time=T, node_i=i, node_j=j),
     )
 
-    return theta, omega, flows, failure_time, F_threshold * base_MVA
+    return theta, omega, flows, failure_time,frequency_failure, F_threshold * base_MVA
 
 
 def newton_raphson(
