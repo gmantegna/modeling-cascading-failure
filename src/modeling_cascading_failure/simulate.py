@@ -26,11 +26,20 @@ def simulate_system(
     cut_time: float,
     delta_t: float,
     alpha: float,
+    frequency_deviation_threshold: float,
     I: np.array,
     gamma: np.array,
     t_max: float,
     include_resistive_losses: bool,
-) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, list]:
+) -> tuple[
+    xr.DataArray,
+    xr.DataArray,
+    xr.DataArray,
+    xr.DataArray,
+    list,
+    list,
+    np.array,
+]:
     """
 
     Simulate the failure of a line in a given power system using the swing equation.
@@ -52,6 +61,8 @@ def simulate_system(
         cut_time (float): Time in seconds at which to cut the line
         delta_t (float): Timestep at which to advance the simulation
         alpha (float): Threshold for line shutoff relative to inferred maximum capacity (susceptance times voltages on either side)
+        frequency_deviation_threshold (float or None): Threshold (in Hz) for frequency deviations relative to the reference frequency
+            - Set to None if no threshold
         I (np.array): Nx1 vector representing inertia constant at each node
         gamma (np.array): Nx1 vector representing damping coefficient at each node
         t_max (float): Time in seconds at which to stop the simulation
@@ -62,7 +73,10 @@ def simulate_system(
             - theta (xr.DataArray): xarray with dimensions Nx(t_max/delta_t) giving evolution of thetas over time
             - omega (xr.DataArray): xarray with dimensions Nx(t_max/delta_t) giving evolution of omegas over time
             - F (xr.DataArray): xarray with dimensions NxNx(t_max/delta_t) giving evolution of line flows over time (in MW)
-            - failure_time (list): list with length number_of_cuts where each value is a tuple showing when each line fails: [i,j,cut_time]
+            - P (xr.DataArray): xarray with dimensions Nx(t_max/delta_t) giving evolution of node powers over time (in MW)
+            - line_failures (list): list with length number_of_cuts where each value is a tuple showing when each line fails: [cut_time,i,j]
+            - node_failures (list or None): list with length number_of_node_failures where each value is a tuple showing when each node fails: [cut_time,i]
+                - Will be set to None if no frequency deviation threshold is being applied.
             - F_threshold (np.array): np.array with dimensions NxN giving the threshold for line cutting applied in the simulation (in MW)
     """
 
@@ -101,11 +115,12 @@ def simulate_system(
     omega_0 = np.zeros((N, 1))
     X_t = np.vstack((theta_0, omega_0))
 
-    # Variables to keep track of the evolution of X and F over time
+    # Variables to keep track of the evolution of X, F, and P over time
     X = np.copy(X_t)
     F = K_G * np.cos(theta_0.T - theta_0) + K_B * np.sin(theta_0.T - theta_0)
     np.fill_diagonal(F, 0)
     F = F[np.newaxis, ...]
+    P_track = np.copy(P)
 
     # Run simulation until t=cut_time
     t = 0
@@ -117,8 +132,10 @@ def simulate_system(
         np.fill_diagonal(F_t, 0)
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
+        P_track = np.hstack((P_track, P))
         t += delta_t
-    # Cut line
+
+    # Cut line and prepare variables for recording failures
     K_G_cut = np.copy(K_G)
     K_B_cut = np.copy(K_B)
     i = line_to_cut[0]
@@ -128,12 +145,16 @@ def simulate_system(
     K_B_cut[i, j] = 0
     K_B_cut[j, i] = 0
     F_threshold = alpha * np.sqrt(np.square(K_G_cut) + np.square(K_B_cut))
-    failure_time = [(cut_time, i, j)]
+    line_failures = [(cut_time, i, j)]
+
+    # Prepare variables for recording generator failures
+    node_failures = []
+    P_cut = np.copy(P)
 
     # Run simulation with cut line and cut more lines as necessary
     while t < t_max:
         X_t = solve.simulate_time_step(
-            X_t, K_G_cut, K_B_cut, P, I, gamma, delta_t
+            X_t, K_G_cut, K_B_cut, P_cut, I, gamma, delta_t
         )
         F_t = K_G_cut * np.cos(X_t[:N].T - X_t[:N]) + K_B_cut * np.sin(
             X_t[:N].T - X_t[:N]
@@ -141,6 +162,7 @@ def simulate_system(
         np.fill_diagonal(F_t, 0)
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
+        P_track = np.hstack((P_track, P_cut))
         t += delta_t
 
         # check for threshold exceedance and cut lines if necessary
@@ -148,12 +170,28 @@ def simulate_system(
         K_G_cut[threshold_exceeded_mask] = 0
         K_B_cut[threshold_exceeded_mask] = 0
 
-        # record lines that were cut in failure_time
+        # record lines that were cut in line_failures
         cuts = np.argwhere(threshold_exceeded_mask)
         if cuts.size != 0:
             # get list of tuples where each tuple has (t,i,j) for the cut (without duplicates)
             cuts_list = list({tuple([t] + sorted(cut)) for cut in cuts})
-            failure_time += cuts_list
+            line_failures += cuts_list
+
+        # check frequency deviation and cut load/generator if necessary
+        if frequency_deviation_threshold is not None:
+            frequency_threshold_exceeded_mask = (
+                np.abs(X_t[N:]) > frequency_deviation_threshold * 2 * np.pi
+            )
+            P_cut[frequency_threshold_exceeded_mask] = 0
+
+            # record nodes forced to disconnect due to frequency deviation
+            node_cuts = np.argwhere(frequency_threshold_exceeded_mask)
+            if node_cuts.size != 0:
+                # get list of tuples where each tuple has (t,i) for the failed node (without duplicates)
+                cuts_list = list({tuple([t] + [cut[0]]) for cut in node_cuts})
+                node_failures += cuts_list
+        else:
+            node_failures = None
 
     # Prepare outputs
     T = np.arange(0, t_max + delta_t * 2, delta_t)
@@ -170,8 +208,21 @@ def simulate_system(
         dims=["time", "node_i", "node_j"],
         coords=dict(time=T, node_i=i, node_j=j),
     )
+    real_power = xr.DataArray(
+        data=P_track * base_MVA,
+        dims=["node", "time"],
+        coords=dict(node=i, time=T),
+    )
 
-    return theta, omega, flows, failure_time, F_threshold * base_MVA
+    return (
+        theta,
+        omega,
+        flows,
+        real_power,
+        line_failures,
+        node_failures,
+        F_threshold * base_MVA,
+    )
 
 
 def newton_raphson(
