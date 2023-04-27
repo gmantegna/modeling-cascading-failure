@@ -22,7 +22,7 @@ def simulate_system(
     eps: float,
     max_iter: float,
     base_MVA: float,
-    line_to_cut: tuple[int, int],
+    lines_to_cut: list,
     nodes_to_cut: list,
     cut_time: float,
     delta_t: float,
@@ -58,12 +58,14 @@ def simulate_system(
         eps (float): Value of delta P or Q to stop iterating at (for N-R)
         max_iter (float): Maximum iterations (for N-R)
         base_MVA (float): Base MVA
-        line_to_cut (tuple[int,int]): Tuple representing which line to cut (ints represent nodes i and j)
+        lines_to_cut (list or None): list of tuple[int,int]'s representing which line to cut (ints represent nodes i and j)
+            - Set to None if no lines to cut
         nodes_to_cut (list or None): List of ints representing which nodes to cut (ints represent node indices)
             - Set to None if no nodes to cut
         cut_time (float): Time in seconds at which to cut the line
         delta_t (float): Timestep at which to advance the simulation
-        alpha (float): Threshold for line shutoff relative to inferred maximum capacity (susceptance times voltages on either side)
+        alpha (float or None): Threshold for line shutoff relative to inferred maximum capacity (susceptance times voltages on either side)
+            - Set to None if no threshold
         frequency_deviation_threshold (float or None): Threshold (in Hz) for frequency deviations relative to the reference frequency
             - Set to None if no threshold
         I (np.array): Nx1 vector representing inertia constant at each node
@@ -141,12 +143,14 @@ def simulate_system(
     # Cut line
     K_G_cut = np.copy(K_G)
     K_B_cut = np.copy(K_B)
-    i = line_to_cut[0]
-    j = line_to_cut[1]
-    K_G_cut[i, j] = 0
-    K_G_cut[j, i] = 0
-    K_B_cut[i, j] = 0
-    K_B_cut[j, i] = 0
+    line_failures = []
+    if lines_to_cut is not None:
+        for cut in lines_to_cut:
+            K_G_cut[cut] = 0
+            K_B_cut[cut] = 0
+            K_G_cut[cut[::-1]] = 0
+            K_B_cut[cut[::-1]] = 0
+            line_failures += [(cut_time, cut[0], cut[1])]
 
     # Cut nodes, if applicable
     P_cut = np.copy(P)
@@ -156,9 +160,11 @@ def simulate_system(
     else:
         node_failures = []
 
-    # Prepare variables for recording failures
-    F_threshold = alpha * np.sqrt(np.square(K_G_cut) + np.square(K_B_cut))
-    line_failures = [(cut_time, i, j)]
+    # Get threshold for line cutoffs
+    if alpha is not None:
+        F_threshold = alpha * np.sqrt(np.square(K_G_cut) + np.square(K_B_cut))
+    else:
+        F_threshold = None
 
     # Run simulation with cut line and cut more lines as necessary
     while t < t_max:
@@ -175,16 +181,19 @@ def simulate_system(
         t += delta_t
 
         # check for threshold exceedance and cut lines if necessary
-        threshold_exceeded_mask = np.abs(F_t) > F_threshold
-        K_G_cut[threshold_exceeded_mask] = 0
-        K_B_cut[threshold_exceeded_mask] = 0
+        if alpha is not None:
+            threshold_exceeded_mask = np.abs(F_t) > F_threshold
+            K_G_cut[threshold_exceeded_mask] = 0
+            K_B_cut[threshold_exceeded_mask] = 0
 
-        # record lines that were cut in line_failures
-        cuts = np.argwhere(threshold_exceeded_mask)
-        if cuts.size != 0:
-            # get list of tuples where each tuple has (t,i,j) for the cut (without duplicates)
-            cuts_list = list({tuple([t] + sorted(cut)) for cut in cuts})
-            line_failures += cuts_list
+            # record lines that were cut in line_failures
+            cuts = np.argwhere(threshold_exceeded_mask)
+            if cuts.size != 0:
+                # get list of tuples where each tuple has (t,i,j) for the cut (without duplicates)
+                cuts_list = list({tuple([t] + sorted(cut)) for cut in cuts})
+                line_failures += cuts_list
+        else:
+            line_failures = None
 
         # check frequency deviation and cut load/generator if necessary
         if frequency_deviation_threshold is not None:
@@ -230,7 +239,7 @@ def simulate_system(
         real_power,
         line_failures,
         node_failures,
-        F_threshold * base_MVA,
+        (F_threshold * base_MVA if alpha is not None else None),
     )
 
 
