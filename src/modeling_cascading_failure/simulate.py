@@ -23,6 +23,7 @@ def simulate_system(
     max_iter: float,
     base_MVA: float,
     line_to_cut: tuple[int, int],
+    nodes_to_cut: list,
     cut_time: float,
     delta_t: float,
     alpha: float,
@@ -58,6 +59,8 @@ def simulate_system(
         max_iter (float): Maximum iterations (for N-R)
         base_MVA (float): Base MVA
         line_to_cut (tuple[int,int]): Tuple representing which line to cut (ints represent nodes i and j)
+        nodes_to_cut (list or None): List of ints representing which nodes to cut (ints represent node indices)
+            - Set to None if no nodes to cut
         cut_time (float): Time in seconds at which to cut the line
         delta_t (float): Timestep at which to advance the simulation
         alpha (float): Threshold for line shutoff relative to inferred maximum capacity (susceptance times voltages on either side)
@@ -135,7 +138,7 @@ def simulate_system(
         P_track = np.hstack((P_track, P))
         t += delta_t
 
-    # Cut line and prepare variables for recording failures
+    # Cut line
     K_G_cut = np.copy(K_G)
     K_B_cut = np.copy(K_B)
     i = line_to_cut[0]
@@ -144,12 +147,18 @@ def simulate_system(
     K_G_cut[j, i] = 0
     K_B_cut[i, j] = 0
     K_B_cut[j, i] = 0
+
+    # Cut nodes, if applicable
+    P_cut = np.copy(P)
+    if nodes_to_cut is not None:
+        P_cut[nodes_to_cut, :] = 0
+        node_failures = [(cut_time, i) for i in nodes_to_cut]
+    else:
+        node_failures = []
+
+    # Prepare variables for recording failures
     F_threshold = alpha * np.sqrt(np.square(K_G_cut) + np.square(K_B_cut))
     line_failures = [(cut_time, i, j)]
-
-    # Prepare variables for recording generator failures
-    node_failures = []
-    P_cut = np.copy(P)
 
     # Run simulation with cut line and cut more lines as necessary
     while t < t_max:
