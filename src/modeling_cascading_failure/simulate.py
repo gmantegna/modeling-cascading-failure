@@ -73,14 +73,12 @@ def simulate_system(
     for v in [PV_x, PQ_x, x_slack, V_abs, V_phase, P_input, Q_input, I, gamma]:
         assert v.shape == correct_shape
 
-    # Solve initial state with Newton-Raphson, ignoring conductance
-    G_multiplier = 1e-6
+    # Solve initial state with Newton-Raphson, including conductance
     G = np.real(Y)
     B = np.imag(Y)
-    Y_smallconductance = G * G_multiplier + B * 1j
     print("running N-R")
     V_abs, theta_0, P, _ = newton_raphson(
-        Y_smallconductance,
+        Y,
         PV_x,
         PQ_x,
         x_slack,
@@ -92,7 +90,8 @@ def simulate_system(
         max_iter,
     )
     print("finished N-R")
-    K = B * (V_abs @ V_abs.T)
+    K_B = B * (V_abs @ V_abs.T)
+    K_G = G * (V_abs @ V_abs.T)
     omega_0 = np.zeros((N, 1))
     X_t = np.vstack((theta_0, omega_0))
 
@@ -106,7 +105,7 @@ def simulate_system(
     t = 0
     while t < cut_time:
         print(t)
-        X_t = solve.simulate_time_step(X_t, K, P, I, gamma, delta_t)
+        X_t = solve.simulate_time_step(X_t, K_G,K_B, P, I, gamma, delta_t)
         F_t = K * np.sin(X_t[:N].T - X_t[:N])
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
@@ -114,38 +113,49 @@ def simulate_system(
     if line_to_cut.size != 0:
         print("cutting line")
         # Cut line
-        K_cut = np.copy(K)
         i = line_to_cut[0]
         j = line_to_cut[1]
-        K_cut[i, j] = 0
-        K_cut[j, i] = 0
-        F_threshold = alpha * np.abs(K_cut)
+        #Modifying admittance matrix
+        K_B_cut = np.copy(K_B)
+        K_B_cut[i, j] = 0
+        K_B_cut[j, i] = 0
+        #Modifying conductance matrix
+        K_G_cut = np.copy(K_G)
+        K_G_cut[i, j] = 0
+        K_G_cut[j, i] = 0
+        F_threshold = alpha * np.abs(K_B_cut)
         failure_time = [(cut_time, i, j)]
         frequency_failure = []
     else:
         print("cutting nodes")
-        K_cut = np.copy(K)
+        K_B_cut = np.copy(K_B)
+        K_G_cut = np.copy(K_G)
         # Cutting nodes
-        K_cut[nodes_to_cut] = 0 #disconnect failed nodes 
+        K_B_cut[nodes_to_cut] = 0 #disconnect failed nodes 
+        K_G_cut[nodes_to_cut] = 0 
+
         for i in np.delete(np.arange(N),nodes_to_cut):
-                K_cut[i][nodes_to_cut] = 0 # nodes connected to the shedded load/generator
-            
-        F_threshold = alpha * np.abs(K_cut)
+                K_B_cut[i][nodes_to_cut] = 0 # nodes connected to the shedded load/generator
+                K_G_cut[i][nodes_to_cut] = 0
+        F_threshold = alpha * np.abs(K_B_cut)
         failure_time = [(cut_time, nodes_to_cut)]
         frequency_failure = []
     # Either Run simulation with cut line and cut more lines as necessary,or run simulation with disconnected nodes, and cut more nodes and lines as necessary
     print("continuing simulation")
     while t < t_max:
             print(t)
-            X_t = solve.simulate_time_step(X_t, K_cut, P, I, gamma, delta_t)
-            F_t = K_cut * np.sin(X_t[:N].T - X_t[:N])
+            X_t = solve.simulate_time_step(X_t, K_G_cut, K_B_cut P, I, gamma, delta_t)
+            F_t = K_B_cut * np.sin(X_t[:N].T - X_t[:N])
             X = np.hstack((X, X_t))
             F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
             t += delta_t
 
             # check for threshold exceedance and cut lines if necessary
             threshold_exceeded_mask = np.abs(F_t) > F_threshold
-            K_cut[threshold_exceeded_mask] = 0
+             # Modifying admittance and conductance matrices to account for line failures
+            K_B_cut[threshold_exceeded_mask] = 0
+            K_G_cut[threshold_exceeded_mask] = 0
+
 
             # record lines that were cut in failure_time
             cuts = np.argwhere(threshold_exceeded_mask)
@@ -156,10 +166,14 @@ def simulate_system(
 
             # check frequency deviation and cut load/generator if necessary
             where_frequency_threshold_exceeded = np.where(X_t[N:] > 0.02*2*np.pi)[0] # nodes where the frequency deviation limit is exceeded
-            K_cut[where_frequency_threshold_exceeded] = 0 #disconnect nodes where frequency limit is exceeded
-            for i in np.delete(np.arange(N),where_frequency_threshold_exceeded):
-                K_cut[i][where_frequency_threshold_exceeded] = 0 # nodes connected to the shedded load/generator
             
+            # Modifying admittance and conductance matrices to account for disconnections
+            K_B_cut[where_frequency_threshold_exceeded] = 0 
+            K_G_cut[where_frequency_threshold_exceeded] = 0 
+            for i in np.delete(np.arange(N),where_frequency_threshold_exceeded):
+                K_B_cut[i][where_frequency_threshold_exceeded] = 0 # nodes connected to the shedded load/generator
+                K_G_cut[i][where_frequency_threshold_exceeded] = 0 
+
             #record nodes forced to disconnect due to frequency deviation
             if where_frequency_threshold_exceeded.size != 0:      
                 # get list of tuples where each tuple has (t,i) for the failed node
