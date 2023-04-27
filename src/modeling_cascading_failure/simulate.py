@@ -23,6 +23,7 @@ def simulate_system(
     max_iter: float,
     base_MVA: float,
     line_to_cut: tuple[int, int],
+    nodes_to_cut: np.array,
     cut_time: float,
     delta_t: float,
     alpha: float,
@@ -47,7 +48,8 @@ def simulate_system(
         eps (float): Value of delta P or Q to stop iterating at (for N-R)
         max_iter (float): Maximum iterations (for N-R)
         base_MVA (float): Base MVA
-        line_to_cut (tuple[int,int]): Tuple representing which line to cut (ints represent nodes i and j)
+        line_to_cut (tuple[int,int]): Tuple representing which line to cut (ints represent nodes i and j), line failure simulation is run if line_to_cut.size !=0
+        nodes_to_cut (np.array): Array of integers representing which nodes to cut (an integer represents a node i), generator/load failure simulation is run if node_to_cut.size != 0
         cut_time (float): Time in seconds at which to cut the line
         delta_t (float): Timestep at which to advance the simulation
         alpha (float): Threshold for line shutoff relative to inferred maximum capacity (susceptance times voltages on either side)
@@ -109,54 +111,77 @@ def simulate_system(
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
         t += delta_t
-    print("cutting line")
-    # Cut line
-    K_cut = np.copy(K)
-    i = line_to_cut[0]
-    j = line_to_cut[1]
-    K_cut[i, j] = 0
-    K_cut[j, i] = 0
-    F_threshold = alpha * np.abs(K_cut)
-    failure_time = [(cut_time, i, j)]
-
-    # Run simulation with cut line and cut more lines as necessary
+    if line_to_cut.size != 0:
+        print("cutting line")
+        # Cut line
+        K_cut = np.copy(K)
+        i = line_to_cut[0]
+        j = line_to_cut[1]
+        K_cut[i, j] = 0
+        K_cut[j, i] = 0
+        F_threshold = alpha * np.abs(K_cut)
+        failure_time = [(cut_time, i, j)]
+        frequency_failure = []
+    else:
+        print("cutting nodes")
+        K_cut = np.copy(K)
+        # Cutting nodes
+        K_cut[nodes_to_cut] = 0 #disconnect failed nodes 
+        for i in np.delete(np.arange(N),nodes_to_cut):
+                K_cut[i][nodes_to_cut] = 0 # nodes connected to the shedded load/generator
+            
+        F_threshold = alpha * np.abs(K_cut)
+        failure_time = [(cut_time, nodes_to_cut)]
+        frequency_failure = []
+    # Either Run simulation with cut line and cut more lines as necessary,or run simulation with disconnected nodes, and cut more nodes and lines as necessary
     print("continuing simulation")
     while t < t_max:
-        print(t)
-        X_t = solve.simulate_time_step(X_t, K_cut, P, I, gamma, delta_t)
-        F_t = K_cut * np.sin(X_t[:N].T - X_t[:N])
-        X = np.hstack((X, X_t))
-        F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
-        t += delta_t
+            print(t)
+            X_t = solve.simulate_time_step(X_t, K_cut, P, I, gamma, delta_t)
+            F_t = K_cut * np.sin(X_t[:N].T - X_t[:N])
+            X = np.hstack((X, X_t))
+            F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
+            t += delta_t
 
-        # check for threshold exceedance and cut lines if necessary
-        threshold_exceeded_mask = np.abs(F_t) > F_threshold
-        K_cut[threshold_exceeded_mask] = 0
+            # check for threshold exceedance and cut lines if necessary
+            threshold_exceeded_mask = np.abs(F_t) > F_threshold
+            K_cut[threshold_exceeded_mask] = 0
 
-        # record lines that were cut in failure_time
-        cuts = np.argwhere(threshold_exceeded_mask)
-        if cuts.size != 0:
-            # get list of tuples where each tuple has (t,i,j) for the cut (without duplicates)
-            cuts_list = list({tuple([t] + sorted(cut)) for cut in cuts})
-            failure_time += cuts_list
+            # record lines that were cut in failure_time
+            cuts = np.argwhere(threshold_exceeded_mask)
+            if cuts.size != 0:
+                # get list of tuples where each tuple has (t,i,j) for the cut (without duplicates)
+                cuts_list = list({tuple([t] + sorted(cut)) for cut in cuts})
+                failure_time += cuts_list
+
+            # check frequency deviation and cut load/generator if necessary
+            where_frequency_threshold_exceeded = np.where(X_t[N:] > 0.02*2*np.pi)[0] # nodes where the frequency deviation limit is exceeded
+            K_cut[where_frequency_threshold_exceeded] = 0 #disconnect nodes where frequency limit is exceeded
+            for i in np.delete(np.arange(N),where_frequency_threshold_exceeded):
+                K_cut[i][where_frequency_threshold_exceeded] = 0 # nodes connected to the shedded load/generator
+            
+            #record nodes forced to disconnect due to frequency deviation
+            if where_frequency_threshold_exceeded.size != 0:      
+                # get list of tuples where each tuple has (t,i) for the failed node
+                frequency_failure.append([tuple([t] + [i]) for i in where_frequency_threshold_exceeded])
 
     # Prepare outputs
     T = np.arange(0, t_max + delta_t * 2, delta_t)
     i = np.arange(N)
     j = np.arange(N)
     theta = xr.DataArray(
-        data=X[:N, :], dims=["node", "time"], coords=dict(node=i, time=T)
-    )
+            data=X[:N, :], dims=["node", "time"], coords=dict(node=i, time=T)
+        )
     omega = xr.DataArray(
-        data=X[N:, :], dims=["node", "time"], coords=dict(node=i, time=T)
-    )
+            data=X[N:, :], dims=["node", "time"], coords=dict(node=i, time=T)
+        )
     flows = xr.DataArray(
-        data=F * base_MVA,
-        dims=["time", "node_i", "node_j"],
-        coords=dict(time=T, node_i=i, node_j=j),
+            data=F * base_MVA,
+            dims=["time", "node_i", "node_j"],
+            coords=dict(time=T, node_i=i, node_j=j),
     )
 
-    return theta, omega, flows, failure_time, F_threshold * base_MVA
+    return theta, omega, flows, failure_time,frequency_failure, F_threshold * base_MVA
 
 
 def newton_raphson(
