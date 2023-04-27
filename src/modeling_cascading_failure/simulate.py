@@ -29,6 +29,7 @@ def simulate_system(
     I: np.array,
     gamma: np.array,
     t_max: float,
+    include_resistive_losses: bool,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, list]:
     """
 
@@ -54,6 +55,7 @@ def simulate_system(
         I (np.array): Nx1 vector representing inertia constant at each node
         gamma (np.array): Nx1 vector representing damping coefficient at each node
         t_max (float): Time in seconds at which to stop the simulation
+        include_resistive_losses (bool): whether to include resistive losses
 
     Returns:
         tuple[xr.DataArray,xr.DataArray,xr.DataArray,list]:
@@ -72,8 +74,16 @@ def simulate_system(
         assert v.shape == correct_shape
 
     # Solve initial state with Newton-Raphson
+
+    G = np.real(Y)
+    B = np.imag(Y)
+    if not include_resistive_losses:
+        G_multiplier = 1e-6
+        Y_for_NR = G * G_multiplier + B * 1j
+    else:
+        Y_for_NR = Y
     V_abs, theta_0, P, _ = newton_raphson(
-        Y,
+        Y_for_NR,
         PV_x,
         PQ_x,
         x_slack,
@@ -84,14 +94,17 @@ def simulate_system(
         eps,
         max_iter,
     )
-    K_G = np.real(Y) * (V_abs @ V_abs.T)
-    K_B = np.imag(Y) * (V_abs @ V_abs.T)
+    K_G = G * (V_abs @ V_abs.T)
+    if not include_resistive_losses:
+        K_G = K_G * 0
+    K_B = B * (V_abs @ V_abs.T)
     omega_0 = np.zeros((N, 1))
     X_t = np.vstack((theta_0, omega_0))
 
     # Variables to keep track of the evolution of X and F over time
     X = np.copy(X_t)
     F = K_G * np.cos(theta_0.T - theta_0) + K_B * np.sin(theta_0.T - theta_0)
+    np.fill_diagonal(F, 0)
     F = F[np.newaxis, ...]
 
     # Run simulation until t=cut_time
@@ -101,6 +114,7 @@ def simulate_system(
         F_t = K_G * np.cos(X_t[:N].T - X_t[:N]) + K_B * np.sin(
             X_t[:N].T - X_t[:N]
         )
+        np.fill_diagonal(F_t, 0)
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
         t += delta_t
@@ -113,18 +127,18 @@ def simulate_system(
     K_G_cut[j, i] = 0
     K_B_cut[i, j] = 0
     K_B_cut[j, i] = 0
-    F_threshold = alpha * np.abs(K_B_cut)
+    F_threshold = alpha * np.sqrt(np.square(K_G_cut) + np.square(K_B_cut))
     failure_time = [(cut_time, i, j)]
 
     # Run simulation with cut line and cut more lines as necessary
     while t < t_max:
-        print(t)
         X_t = solve.simulate_time_step(
             X_t, K_G_cut, K_B_cut, P, I, gamma, delta_t
         )
         F_t = K_G_cut * np.cos(X_t[:N].T - X_t[:N]) + K_B_cut * np.sin(
             X_t[:N].T - X_t[:N]
         )
+        np.fill_diagonal(F_t, 0)
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
         t += delta_t
@@ -218,7 +232,6 @@ def newton_raphson(
     iterations = 0
     epsilon = 1
     while epsilon > eps:
-        print(iterations)
 
         P = np.zeros((N, 1))
         Q = np.zeros((N, 1))
