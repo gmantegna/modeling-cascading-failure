@@ -29,6 +29,7 @@ def simulate_system(
     I: np.array,
     gamma: np.array,
     t_max: float,
+    include_resistive_losses: bool,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, list]:
     """
 
@@ -54,6 +55,7 @@ def simulate_system(
         I (np.array): Nx1 vector representing inertia constant at each node
         gamma (np.array): Nx1 vector representing damping coefficient at each node
         t_max (float): Time in seconds at which to stop the simulation
+        include_resistive_losses (bool): whether to include resistive losses
 
     Returns:
         tuple[xr.DataArray,xr.DataArray,xr.DataArray,list]:
@@ -71,14 +73,17 @@ def simulate_system(
     for v in [PV_x, PQ_x, x_slack, V_abs, V_phase, P_input, Q_input, I, gamma]:
         assert v.shape == correct_shape
 
-    # Solve initial state with Newton-Raphson, ignoring conductance
-    G_multiplier = 1e-6
+    # Solve initial state with Newton-Raphson
+
     G = np.real(Y)
     B = np.imag(Y)
-    Y_smallconductance = G * G_multiplier + B * 1j
-    print("running N-R")
+    if not include_resistive_losses:
+        G_multiplier = 1e-6
+        Y_for_NR = G * G_multiplier + B * 1j
+    else:
+        Y_for_NR = Y
     V_abs, theta_0, P, _ = newton_raphson(
-        Y_smallconductance,
+        Y_for_NR,
         PV_x,
         PQ_x,
         x_slack,
@@ -89,49 +94,59 @@ def simulate_system(
         eps,
         max_iter,
     )
-    print("finished N-R")
-    K = B * (V_abs @ V_abs.T)
+    K_G = G * (V_abs @ V_abs.T)
+    if not include_resistive_losses:
+        K_G = K_G * 0
+    K_B = B * (V_abs @ V_abs.T)
     omega_0 = np.zeros((N, 1))
     X_t = np.vstack((theta_0, omega_0))
 
     # Variables to keep track of the evolution of X and F over time
     X = np.copy(X_t)
-    F = K * np.sin(theta_0.T - theta_0)
+    F = K_G * np.cos(theta_0.T - theta_0) + K_B * np.sin(theta_0.T - theta_0)
+    np.fill_diagonal(F, 0)
     F = F[np.newaxis, ...]
 
     # Run simulation until t=cut_time
-    print("running simulation")
     t = 0
     while t < cut_time:
-        print(t)
-        X_t = solve.simulate_time_step(X_t, K, P, I, gamma, delta_t)
-        F_t = K * np.sin(X_t[:N].T - X_t[:N])
+        X_t = solve.simulate_time_step(X_t, K_G, K_B, P, I, gamma, delta_t)
+        F_t = K_G * np.cos(X_t[:N].T - X_t[:N]) + K_B * np.sin(
+            X_t[:N].T - X_t[:N]
+        )
+        np.fill_diagonal(F_t, 0)
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
         t += delta_t
-    print("cutting line")
     # Cut line
-    K_cut = np.copy(K)
+    K_G_cut = np.copy(K_G)
+    K_B_cut = np.copy(K_B)
     i = line_to_cut[0]
     j = line_to_cut[1]
-    K_cut[i, j] = 0
-    K_cut[j, i] = 0
-    F_threshold = alpha * np.abs(K_cut)
+    K_G_cut[i, j] = 0
+    K_G_cut[j, i] = 0
+    K_B_cut[i, j] = 0
+    K_B_cut[j, i] = 0
+    F_threshold = alpha * np.sqrt(np.square(K_G_cut) + np.square(K_B_cut))
     failure_time = [(cut_time, i, j)]
 
     # Run simulation with cut line and cut more lines as necessary
-    print("continuing simulation")
     while t < t_max:
-        print(t)
-        X_t = solve.simulate_time_step(X_t, K_cut, P, I, gamma, delta_t)
-        F_t = K_cut * np.sin(X_t[:N].T - X_t[:N])
+        X_t = solve.simulate_time_step(
+            X_t, K_G_cut, K_B_cut, P, I, gamma, delta_t
+        )
+        F_t = K_G_cut * np.cos(X_t[:N].T - X_t[:N]) + K_B_cut * np.sin(
+            X_t[:N].T - X_t[:N]
+        )
+        np.fill_diagonal(F_t, 0)
         X = np.hstack((X, X_t))
         F = np.concatenate((F, F_t[np.newaxis, ...]), axis=0)
         t += delta_t
 
         # check for threshold exceedance and cut lines if necessary
         threshold_exceeded_mask = np.abs(F_t) > F_threshold
-        K_cut[threshold_exceeded_mask] = 0
+        K_G_cut[threshold_exceeded_mask] = 0
+        K_B_cut[threshold_exceeded_mask] = 0
 
         # record lines that were cut in failure_time
         cuts = np.argwhere(threshold_exceeded_mask)
@@ -217,7 +232,6 @@ def newton_raphson(
     iterations = 0
     epsilon = 1
     while epsilon > eps:
-        print(iterations)
 
         P = np.zeros((N, 1))
         Q = np.zeros((N, 1))
