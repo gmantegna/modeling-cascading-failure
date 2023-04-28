@@ -28,6 +28,7 @@ def simulate_system(
     delta_t: float,
     alpha: float,
     frequency_deviation_threshold: float,
+    apply_freq_dev_during_sim: bool,
     I: np.array,
     gamma: np.array,
     t_max: float,
@@ -40,6 +41,8 @@ def simulate_system(
     list,
     list,
     np.array,
+    list,
+    xr.DataArray,
 ]:
     """
 
@@ -66,8 +69,8 @@ def simulate_system(
         delta_t (float): Timestep at which to advance the simulation
         alpha (float or None): Threshold for line shutoff relative to inferred maximum capacity (susceptance times voltages on either side)
             - Set to None if no threshold
-        frequency_deviation_threshold (float or None): Threshold (in Hz) for frequency deviations relative to the reference frequency
-            - Set to None if no threshold
+        frequency_deviation_threshold (float): Threshold (in Hz) for frequency deviations relative to the reference frequency
+        apply_freq_dev_during_sim (bool): Whether to apply frequency deviation cutoffs during the simulation
         I (np.array): Nx1 vector representing inertia constant at each node
         gamma (np.array): Nx1 vector representing damping coefficient at each node
         t_max (float): Time in seconds at which to stop the simulation
@@ -79,10 +82,14 @@ def simulate_system(
             - omega (xr.DataArray): xarray with dimensions Nx(t_max/delta_t) giving evolution of omegas over time
             - F (xr.DataArray): xarray with dimensions NxNx(t_max/delta_t) giving evolution of line flows over time (in MW)
             - P (xr.DataArray): xarray with dimensions Nx(t_max/delta_t) giving evolution of node powers over time (in MW)
-            - line_failures (list): list with length number_of_cuts where each value is a tuple showing when each line fails: [cut_time,i,j]
-            - node_failures (list or None): list with length number_of_node_failures where each value is a tuple showing when each node fails: [cut_time,i]
-                - Will be set to None if no frequency deviation threshold is being applied.
+            - line_failures (list or None): list with length number_of_cuts where each value is a tuple showing when each line fails: [cut_time,i,j]
+            - node_failures (list): list with length number_of_node_failures where each value is a tuple showing when each node fails: [cut_time,i]
+                - If frequency deviation threshold is not being applied udring simulation, cut_time will be the final time
             - F_threshold (np.array): np.array with dimensions NxN giving the threshold for line cutting applied in the simulation (in MW)
+            - line_failures_static (list or None): list with length number_of_cuts where each value is a tuple showing when each line fails
+                in the static case: [iteration n,i,j]
+            - flows_static (xr.DataArray): xarray with dimensions Nx(number_of_static_NR_iterations) giving evolution of line flows over time
+                in the static analysis
     """
 
     # Assert that inputs are the proper size
@@ -124,6 +131,7 @@ def simulate_system(
     X = np.copy(X_t)
     F = K_G * np.cos(theta_0.T - theta_0) + K_B * np.sin(theta_0.T - theta_0)
     np.fill_diagonal(F, 0)
+    F_static_all = F[np.newaxis, ...]
     F = F[np.newaxis, ...]
     P_track = np.copy(P)
 
@@ -143,14 +151,19 @@ def simulate_system(
     # Cut line
     K_G_cut = np.copy(K_G)
     K_B_cut = np.copy(K_B)
+    Y_for_NR_cut = np.copy(Y_for_NR)
     line_failures = []
+    line_failures_static = []
     if lines_to_cut is not None:
         for cut in lines_to_cut:
             K_G_cut[cut] = 0
             K_B_cut[cut] = 0
+            Y_for_NR_cut[cut] = 0
             K_G_cut[cut[::-1]] = 0
             K_B_cut[cut[::-1]] = 0
+            Y_for_NR_cut[cut[::-1]] = 0
             line_failures += [(cut_time, cut[0], cut[1])]
+            line_failures_static += [(0, cut[0], cut[1])]
 
     # Cut nodes, if applicable
     P_cut = np.copy(P)
@@ -196,7 +209,7 @@ def simulate_system(
             line_failures = None
 
         # check frequency deviation and cut load/generator if necessary
-        if frequency_deviation_threshold is not None:
+        if apply_freq_dev_during_sim:
             frequency_threshold_exceeded_mask = (
                 np.abs(X_t[N:]) > frequency_deviation_threshold * 2 * np.pi
             )
@@ -208,13 +221,77 @@ def simulate_system(
                 # get list of tuples where each tuple has (t,i) for the failed node (without duplicates)
                 cuts_list = list({tuple([t] + [cut[0]]) for cut in node_cuts})
                 node_failures += cuts_list
-        else:
-            node_failures = None
+    if not apply_freq_dev_during_sim:
+        frequency_threshold_exceeded_mask = (
+            np.abs(X_t[N:]) > frequency_deviation_threshold * 2 * np.pi
+        )
+        # record nodes forced to disconnect due to frequency deviation
+        node_cuts = np.argwhere(frequency_threshold_exceeded_mask)
+        if node_cuts.size != 0:
+            # get list of tuples where each tuple has (t,i) for the failed node (without duplicates)
+            cuts_list = list({tuple([t] + [cut[0]]) for cut in node_cuts})
+            node_failures += cuts_list
+
+    # Get static solution to disturbed state from N-R
+    if alpha is not None:
+        line_failures_static_minus1 = []
+        n = 0
+        while n == 0 or len(line_failures_static_minus1) != len(
+            line_failures_static
+        ):
+            try:
+                V_abs_static, theta_0_static, _, _ = newton_raphson(
+                    Y_for_NR_cut,
+                    PV_x,
+                    PQ_x,
+                    x_slack,
+                    V_abs,
+                    V_phase,
+                    P_input,
+                    Q_input,
+                    eps,
+                    max_iter,
+                )
+                F_static = np.real(Y_for_NR_cut) * (
+                    V_abs_static @ V_abs_static.T
+                ) * np.cos(theta_0_static.T - theta_0_static[:N]) + np.imag(
+                    Y_for_NR_cut
+                ) * (
+                    V_abs_static @ V_abs_static.T
+                ) * np.sin(
+                    theta_0_static.T - theta_0_static[:N]
+                )
+                F_static_all = np.concatenate(
+                    (F_static_all, F_static[np.newaxis, ...]), axis=0
+                )
+                threshold_exceeded_mask = np.abs(F_static) > F_threshold
+                Y_for_NR_cut[threshold_exceeded_mask] = 0
+                # record lines that were cut in line_failures
+                cuts = np.argwhere(threshold_exceeded_mask)
+                line_failures_static_minus1 = list(line_failures_static)
+                if cuts.size != 0:
+                    # get list of tuples where each tuple has (n,i,j) for the cut (without duplicates)
+                    cuts_list = list(
+                        {tuple([n] + sorted(cut)) for cut in cuts}
+                    )
+                    line_failures_static += cuts_list
+                n += 1
+            except np.linalg.LinAlgError as e:
+                print(
+                    "Note N-R after cut could not solve due to error {}".format(
+                        e
+                    )
+                )
+                break
+
+    else:
+        line_failures_static = None
 
     # Prepare outputs
     T = np.arange(0, t_max + delta_t * 2, delta_t)
     i = np.arange(N)
     j = np.arange(N)
+    n_index = np.arange(n + 1)
     theta = xr.DataArray(
         data=X[:N, :], dims=["node", "time"], coords=dict(node=i, time=T)
     )
@@ -231,6 +308,11 @@ def simulate_system(
         dims=["node", "time"],
         coords=dict(node=i, time=T),
     )
+    flows_static = xr.DataArray(
+        data=F_static_all * base_MVA,
+        dims=["iteration", "node_i", "node_j"],
+        coords=dict(iteration=n_index, node_i=i, node_j=j),
+    )
 
     return (
         theta,
@@ -240,6 +322,8 @@ def simulate_system(
         line_failures,
         node_failures,
         (F_threshold * base_MVA if alpha is not None else None),
+        line_failures_static,
+        flows_static,
     )
 
 
