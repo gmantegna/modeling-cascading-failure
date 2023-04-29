@@ -30,9 +30,11 @@ def simulate_system(
     frequency_deviation_threshold: float,
     apply_freq_dev_during_sim: bool,
     I: np.array,
+    H: float,
     gamma: np.array,
     t_max: float,
     include_resistive_losses: bool,
+    ref_freq: float,
 ) -> tuple[
     xr.DataArray,
     xr.DataArray,
@@ -71,10 +73,12 @@ def simulate_system(
             - Set to None if no threshold
         frequency_deviation_threshold (float): Threshold (in Hz) for frequency deviations relative to the reference frequency
         apply_freq_dev_during_sim (bool): Whether to apply frequency deviation cutoffs during the simulation
-        I (np.array): Nx1 vector representing inertia constant at each node
+        I (np.array): Nx1 vector representing inertia constant at each node. Set to None if using H instead
+        H (float): float representing the inertia constant (function will calculate I based on generator powers). Set to None if using I instead
         gamma (np.array): Nx1 vector representing damping coefficient at each node
         t_max (float): Time in seconds at which to stop the simulation
         include_resistive_losses (bool): whether to include resistive losses
+        ref_freq (float): reference frequency in Hz
 
     Returns:
         tuple[xr.DataArray,xr.DataArray,xr.DataArray,list]:
@@ -96,8 +100,9 @@ def simulate_system(
     assert Y.shape[0] == Y.shape[1]
     N = Y.shape[0]
     correct_shape = (N, 1)
-    for v in [PV_x, PQ_x, x_slack, V_abs, V_phase, P_input, Q_input, I, gamma]:
+    for v in [PV_x, PQ_x, x_slack, V_abs, V_phase, P_input, Q_input, gamma]:
         assert v.shape == correct_shape
+    assert not isinstance(I, np.ndarray) or H is None
 
     # Solve initial state with Newton-Raphson
 
@@ -134,6 +139,14 @@ def simulate_system(
     F_static_all = F[np.newaxis, ...]
     F = F[np.newaxis, ...]
     P_track = np.copy(P)
+
+    # Calculate I if it was not input
+    if H is not None:
+        P_multiplier = 2 * H / (ref_freq * 2 * np.pi) ** 2
+        P_for_I = np.copy(P) * base_MVA
+        P_for_I[P_for_I <= 0] = 0.1
+        I = P_for_I * P_multiplier
+        print(I)
 
     # Run simulation until t=cut_time
     t = 0
