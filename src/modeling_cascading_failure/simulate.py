@@ -143,9 +143,9 @@ def simulate_system(
     # Calculate I if it was not input
     if H is not None:
         P_multiplier = 2 * H / (ref_freq * 2 * np.pi) ** 2
-        P_for_I = np.copy(P) * base_MVA
-        P_for_I[P_for_I <= 0] = 0.1
+        P_for_I = np.copy(P) * base_MVA * 1e6
         I = P_for_I * P_multiplier
+        I[I <= 0] = 0.01
         print(I)
 
     # Run simulation until t=cut_time
