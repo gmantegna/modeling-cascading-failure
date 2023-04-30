@@ -45,6 +45,9 @@ def simulate_system(
     np.array,
     list,
     xr.DataArray,
+    float,
+    float,
+    float,
 ]:
     """
 
@@ -94,6 +97,9 @@ def simulate_system(
                 in the static case: [iteration n,i,j]
             - flows_static (xr.DataArray): xarray with dimensions Nx(number_of_static_NR_iterations) giving evolution of line flows over time
                 in the static analysis
+            - fraction_lines_failed (float): fraction of lines failed in the simulation (including the one that was cut)
+            - fraction_lines_failed_static (float): fraction of lines failed in the static case
+            - fraction_nodes_disconnected (float): fraction of nodes disconnected either during the simulation or at the end
     """
 
     # Assert that inputs are the proper size
@@ -142,10 +148,8 @@ def simulate_system(
 
     # Calculate I if it was not input
     if H is not None:
-        P_multiplier = 2 * H / (ref_freq * 2 * np.pi) ** 2
-        P_for_I = np.copy(P) * base_MVA * 1e6
-        I = P_for_I * P_multiplier
-        I[I <= 0] = 0.01
+        I = (2 * H / (ref_freq * 2 * np.pi)) * np.copy(P)
+        I[I <= 0] = 0.001
         print(I)
 
     # Run simulation until t=cut_time
@@ -327,6 +331,14 @@ def simulate_system(
         coords=dict(iteration=n_index, node_i=i, node_j=j),
     )
 
+    # number of line and node failures
+    num_lines = (
+        np.count_nonzero(np.where(np.eye(Y.shape[0], dtype=bool), 0, Y)) / 2
+    )
+    fraction_lines_failed = len(line_failures) / num_lines
+    fraction_lines_failed_static = len(line_failures_static) / num_lines
+    fraction_nodes_disconnected = len(list({x[1] for x in node_failures})) / N
+
     return (
         theta,
         omega,
@@ -337,6 +349,9 @@ def simulate_system(
         (F_threshold * base_MVA if alpha is not None else None),
         line_failures_static,
         flows_static,
+        fraction_lines_failed,
+        fraction_lines_failed_static,
+        fraction_nodes_disconnected,
     )
 
 
