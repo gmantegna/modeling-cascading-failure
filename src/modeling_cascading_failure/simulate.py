@@ -119,7 +119,7 @@ def simulate_system(
         Y_for_NR = G * G_multiplier + B * 1j
     else:
         Y_for_NR = Y
-    V_abs, theta_0, P, _ = newton_raphson(
+    V_abs, theta_0, P, _, reached_max_iter = newton_raphson(
         Y_for_NR,
         PV_x,
         PQ_x,
@@ -131,6 +131,10 @@ def simulate_system(
         eps,
         max_iter,
     )
+    if reached_max_iter:
+        print(
+            "warning: N-R for initial solve terminated due to reaching maximum iterations"
+        )
     K_G = G * (V_abs @ V_abs.T)
     if not include_resistive_losses:
         K_G = K_G * 0
@@ -179,8 +183,9 @@ def simulate_system(
             K_G_cut[cut[::-1]] = 0
             K_B_cut[cut[::-1]] = 0
             Y_for_NR_cut[cut[::-1]] = 0
-            line_failures += [(cut_time, cut[0], cut[1])]
-            line_failures_static += [(0, cut[0], cut[1])]
+            cut_sorted = sorted(cut)
+            line_failures += [(cut_time, cut_sorted[0], cut_sorted[1])]
+            line_failures_static += [(0, cut_sorted[0], cut_sorted[1])]
 
     # Cut nodes, if applicable
     P_cut = np.copy(P)
@@ -219,9 +224,11 @@ def simulate_system(
             # record lines that were cut in line_failures
             cuts = np.argwhere(threshold_exceeded_mask)
             if cuts.size != 0:
-                # get list of tuples where each tuple has (t,i,j) for the cut (without duplicates)
-                cuts_list = list({tuple([t] + sorted(cut)) for cut in cuts})
-                line_failures += cuts_list
+                for cut in cuts:
+                    list_of_cuts = [(x[1], x[2]) for x in line_failures]
+                    current_cut = tuple(sorted(cut))
+                    if current_cut not in list_of_cuts:
+                        line_failures += [(t,) + current_cut]
         else:
             line_failures = None
 
@@ -257,7 +264,13 @@ def simulate_system(
             line_failures_static
         ):
             try:
-                V_abs_static, theta_0_static, _, _ = newton_raphson(
+                (
+                    V_abs_static,
+                    theta_0_static,
+                    _,
+                    _,
+                    reached_max_iter,
+                ) = newton_raphson(
                     Y_for_NR_cut,
                     PV_x,
                     PQ_x,
@@ -269,29 +282,40 @@ def simulate_system(
                     eps,
                     max_iter,
                 )
-                F_static = np.real(Y_for_NR_cut) * (
-                    V_abs_static @ V_abs_static.T
-                ) * np.cos(theta_0_static.T - theta_0_static[:N]) + np.imag(
-                    Y_for_NR_cut
-                ) * (
-                    V_abs_static @ V_abs_static.T
-                ) * np.sin(
-                    theta_0_static.T - theta_0_static[:N]
-                )
-                F_static_all = np.concatenate(
-                    (F_static_all, F_static[np.newaxis, ...]), axis=0
-                )
-                threshold_exceeded_mask = np.abs(F_static) > F_threshold
-                Y_for_NR_cut[threshold_exceeded_mask] = 0
-                # record lines that were cut in line_failures
-                cuts = np.argwhere(threshold_exceeded_mask)
-                line_failures_static_minus1 = list(line_failures_static)
-                if cuts.size != 0:
-                    # get list of tuples where each tuple has (n,i,j) for the cut (without duplicates)
-                    cuts_list = list(
-                        {tuple([n] + sorted(cut)) for cut in cuts}
+                if reached_max_iter:
+                    print(
+                        "reached maximum N-R iterations, aborting static solve"
                     )
-                    line_failures_static += cuts_list
+                    break
+                else:
+                    F_static = np.real(Y_for_NR_cut) * (
+                        V_abs_static @ V_abs_static.T
+                    ) * np.cos(
+                        theta_0_static.T - theta_0_static[:N]
+                    ) + np.imag(
+                        Y_for_NR_cut
+                    ) * (
+                        V_abs_static @ V_abs_static.T
+                    ) * np.sin(
+                        theta_0_static.T - theta_0_static[:N]
+                    )
+                    np.fill_diagonal(F_static, 0)
+                    F_static_all = np.concatenate(
+                        (F_static_all, F_static[np.newaxis, ...]), axis=0
+                    )
+                    threshold_exceeded_mask = np.abs(F_static) > F_threshold
+                    Y_for_NR_cut[threshold_exceeded_mask] = 0
+                    # record lines that were cut in line_failures
+                    cuts = np.argwhere(threshold_exceeded_mask)
+                    line_failures_static_minus1 = list(line_failures_static)
+                    if cuts.size != 0:
+                        for cut in cuts:
+                            list_of_cuts = [
+                                (x[1], x[2]) for x in line_failures_static
+                            ]
+                            current_cut = tuple(sorted(cut))
+                            if current_cut not in list_of_cuts:
+                                line_failures_static += [(t,) + current_cut]
                 n += 1
             except np.linalg.LinAlgError as e:
                 print(
@@ -366,7 +390,7 @@ def newton_raphson(
     Q_input: np.array,
     eps: float,
     max_iter: float,
-) -> tuple[np.array, np.array, np.array, np.array]:
+) -> tuple[np.array, np.array, np.array, np.array, bool]:
     """Function to solve power flow equations for a system of N buses using the Newton-Raphson method.
     N is implicit in the inputs.
 
@@ -392,6 +416,7 @@ def newton_raphson(
                 by the inputs)
             - Q (np.array): dimensions Nx1, represents the reactive power at each bus (including where
                 specified by the inputs)
+            - reached_max_iter (bool): True if termination happened due to reaching max iterations
     """
 
     # assert Y is square
@@ -412,6 +437,7 @@ def newton_raphson(
 
     iterations = 0
     epsilon = 1
+    reached_max_iter = False
     while epsilon > eps:
 
         P = np.zeros((N, 1))
@@ -524,6 +550,7 @@ def newton_raphson(
         # update iteration variables
         epsilon = max(abs(dp_dq))
         if iterations >= max_iter:
+            reached_max_iter = True
             break
         iterations += 1
 
@@ -546,4 +573,4 @@ def newton_raphson(
     V_abs = np.abs(V)
     V_phase = npphase(V)
 
-    return V_abs, V_phase, P, Q
+    return V_abs, V_phase, P, Q, reached_max_iter
