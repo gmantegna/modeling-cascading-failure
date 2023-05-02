@@ -102,6 +102,11 @@ def test_simulate():
         line_failures,
         node_failures,
         F_threshold,
+        _,
+        _,
+        _,
+        _,
+        _,
     ) = simulate.simulate_system(
         Y,
         PV_x,
@@ -120,10 +125,13 @@ def test_simulate():
         delta_t=0.1,
         alpha=0.7,
         frequency_deviation_threshold=0.5,
+        apply_freq_dev_during_sim=True,
         I=I_array,
+        H=None,
         gamma=gamma_array,
         t_max=10,
         include_resistive_losses=True,
+        ref_freq=60,
     )
     assert np.max(np.abs(theta.sel(time=10).values - reference)) < 0.1
 
@@ -154,6 +162,11 @@ def test_simulate():
         line_failures,
         node_failures,
         F_threshold,
+        _,
+        _,
+        _,
+        _,
+        _,
     ) = simulate.simulate_system(
         Y,
         PV_x,
@@ -172,10 +185,13 @@ def test_simulate():
         delta_t=0.1,
         alpha=0.7,
         frequency_deviation_threshold=0.5,
+        apply_freq_dev_during_sim=True,
         I=I_array,
+        H=None,
         gamma=gamma_array,
         t_max=10,
         include_resistive_losses=True,
+        ref_freq=60,
     )
     assert np.max(np.abs(theta.sel(time=10).values - reference)) < 0.1
 
@@ -206,6 +222,11 @@ def test_simulate():
         line_failures,
         node_failures,
         F_threshold,
+        _,
+        _,
+        _,
+        _,
+        _,
     ) = simulate.simulate_system(
         Y,
         PV_x,
@@ -224,10 +245,13 @@ def test_simulate():
         delta_t=0.1,
         alpha=0.8,
         frequency_deviation_threshold=0.5,
+        apply_freq_dev_during_sim=True,
         I=I_array,
+        H=None,
         gamma=gamma_array,
         t_max=10,
         include_resistive_losses=True,
+        ref_freq=60,
     )
     assert np.max(np.abs(theta.sel(time=10).values - reference)) < 0.1
 
@@ -258,6 +282,11 @@ def test_simulate():
         line_failures,
         node_failures,
         F_threshold,
+        _,
+        _,
+        _,
+        _,
+        _,
     ) = simulate.simulate_system(
         Y,
         PV_x,
@@ -276,9 +305,12 @@ def test_simulate():
         delta_t=0.1,
         alpha=0.9,
         frequency_deviation_threshold=1,
+        apply_freq_dev_during_sim=True,
         I=I_array,
+        H=None,
         gamma=gamma_array,
         t_max=10,
         include_resistive_losses=False,
+        ref_freq=60,
     )
     assert np.max(np.abs(theta.sel(time=10).values - reference)) < 0.1
